@@ -139,6 +139,8 @@ async function handleCommand(command, params) {
       return await deleteNode(params);
     case "delete_multiple_nodes":
       return await deleteMultipleNodes(params);
+    case "delete_hidden_nodes":
+      return await deleteHiddenNodes(params);
     case "get_styles":
       return await getStyles();
     case "get_local_components":
@@ -149,6 +151,8 @@ async function handleCommand(command, params) {
       return await createComponentInstance(params);
     case "export_node_as_image":
       return await exportNodeAsImage(params);
+    case "rasterize_node_to_image":
+      return await rasterizeNodeToImage(params);
     case "set_corner_radius":
       return await setCornerRadius(params);
     case "set_text_content":
@@ -1302,6 +1306,225 @@ function customBase64Encode(bytes) {
   }
 
   return base64;
+}
+
+/**
+ * 根据名称查找节点
+ * 支持不同的搜索范围
+ */
+async function findNodeByName(nodeName, searchScope) {
+  let searchNodes = [];
+
+  switch (searchScope) {
+    case "current_selection":
+      // 在当前选择中搜索
+      searchNodes = figma.currentPage.selection;
+      break;
+    
+    case "current_page":
+      // 在当前页面中搜索
+      searchNodes = figma.currentPage.children;
+      break;
+    
+    case "entire_document":
+      // 在整个文档中搜索
+      searchNodes = figma.root.children.flatMap(page => page.children);
+      break;
+    
+    default:
+      searchNodes = figma.currentPage.children;
+  }
+
+  // 递归搜索函数
+  function searchInNode(node, targetName) {
+    // 精确匹配
+    if (node.name === targetName) {
+      return node;
+    }
+
+    // 如果节点有子节点，递归搜索
+    if ("children" in node && node.children) {
+      for (const child of node.children) {
+        const found = searchInNode(child, targetName);
+        if (found) return found;
+      }
+    }
+
+    return null;
+  }
+
+  // 在搜索范围内查找
+  for (const node of searchNodes) {
+    const found = searchInNode(node, nodeName);
+    if (found) return found;
+  }
+
+  // 如果精确匹配失败，尝试模糊匹配
+  function fuzzySearchInNode(node, targetName) {
+    const lowerTargetName = targetName.toLowerCase();
+    
+    // 包含匹配
+    if (node.name.toLowerCase().includes(lowerTargetName)) {
+      return node;
+    }
+
+    // 递归搜索子节点
+    if ("children" in node && node.children) {
+      for (const child of node.children) {
+        const found = fuzzySearchInNode(child, targetName);
+        if (found) return found;
+      }
+    }
+
+    return null;
+  }
+
+  // 模糊匹配
+  for (const node of searchNodes) {
+    const found = fuzzySearchInNode(node, nodeName);
+    if (found) {
+      console.log(`Found node by fuzzy match: "${found.name}" for search term "${nodeName}"`);
+      return found;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * 将节点像素化为图片节点
+ * 在Figma画布中创建一个包含节点渲染结果的图片节点
+ */
+async function rasterizeNodeToImage(params) {
+  const { 
+    nodeId, 
+    format = "PNG", 
+    scale = 1, 
+    replaceOriginal = false
+  } = params || {};
+
+  try {
+    // 1. 验证必需参数
+    if (!nodeId) {
+      throw new Error("nodeId parameter is required");
+    }
+
+    // 2. 查找目标节点
+    console.log(`Searching for node by ID: ${nodeId}`);
+    const targetNode = await figma.getNodeByIdAsync(nodeId);
+    if (!targetNode) {
+      throw new Error(`Node not found with ID: ${nodeId}`);
+    }
+
+    // 3. 验证节点是否支持导出
+    if (!("exportAsync" in targetNode)) {
+      throw new Error(`Node "${targetNode.name}" (${targetNode.id}) does not support rasterization`);
+    }
+
+    // 4. 获取节点的位置和尺寸信息
+    const originalX = targetNode.x;
+    const originalY = targetNode.y;
+    const originalWidth = targetNode.width;
+    const originalHeight = targetNode.height;
+    const originalParent = targetNode.parent;
+
+    console.log(`Rasterizing node "${targetNode.name}" at (${originalX}, ${originalY}) with size ${originalWidth}×${originalHeight}`);
+
+    // 5. 导出节点为图片数据
+    const exportSettings = {
+      format: format.toUpperCase(),
+      constraint: { type: "SCALE", value: scale },
+    };
+
+    const imageBytes = await targetNode.exportAsync(exportSettings);
+    console.log(`Exported ${imageBytes.byteLength} bytes of image data`);
+
+    // 6. 创建图片节点
+    const imageNode = figma.createImage(imageBytes);
+    const rectangleNode = figma.createRectangle();
+
+    // 7. 设置图片节点属性
+    rectangleNode.name = `${targetNode.name} (Rasterized)`;
+    
+    // 设置位置和尺寸
+    if (replaceOriginal) {
+      // 替换原节点：使用相同位置
+      rectangleNode.x = originalX;
+      rectangleNode.y = originalY;
+    } else {
+      // 不替换：放在原节点旁边
+      rectangleNode.x = originalX + originalWidth + 20; // 偏移20px
+      rectangleNode.y = originalY;
+    }
+    
+    rectangleNode.resize(originalWidth, originalHeight);
+
+    // 7. 应用图片填充
+    const imageFill = {
+      type: "IMAGE",
+      imageHash: imageNode.hash,
+      scaleMode: "FILL"
+    };
+    
+    rectangleNode.fills = [imageFill];
+
+    // 8. 添加到相同的父容器
+    if (originalParent && "appendChild" in originalParent) {
+      originalParent.appendChild(rectangleNode);
+    } else {
+      // 如果无法添加到父容器，添加到当前页面
+      figma.currentPage.appendChild(rectangleNode);
+    }
+
+    // 9. 如果需要替换原节点
+    if (replaceOriginal) {
+      // 获取原节点在父容器中的索引
+      let insertIndex = 0;
+      if (originalParent && "children" in originalParent) {
+        insertIndex = originalParent.children.indexOf(targetNode);
+      }
+
+      // 移除原节点
+      targetNode.remove();
+
+      // 如果可能，调整新节点的层级顺序
+      if (originalParent && "insertChild" in originalParent && insertIndex >= 0) {
+        try {
+          originalParent.insertChild(insertIndex, rectangleNode);
+        } catch (error) {
+          console.warn("Could not maintain original node position:", error);
+        }
+      }
+
+      console.log(`Replaced original node "${targetNode.name}" with rasterized image`);
+    } else {
+      console.log(`Created rasterized image alongside original node`);
+    }
+
+    // 10. 选中新创建的图片节点
+    figma.currentPage.selection = [rectangleNode];
+    figma.viewport.scrollAndZoomIntoView([rectangleNode]);
+
+    return {
+      originalNodeId: targetNode.id,
+      originalNodeName: targetNode.name,
+      imageNodeId: rectangleNode.id,
+      imageNodeName: rectangleNode.name,
+      format: format.toUpperCase(),
+      scale,
+      width: rectangleNode.width,
+      height: rectangleNode.height,
+      replaced: replaceOriginal,
+      position: {
+        x: rectangleNode.x,
+        y: rectangleNode.y
+      }
+    };
+
+  } catch (error) {
+    console.error("Rasterization error:", error);
+    throw new Error(`Error rasterizing node to image: ${error.message}`);
+  }
 }
 
 async function setCornerRadius(params) {
@@ -4025,4 +4248,244 @@ async function setSelections(params) {
     notFoundIds: notFoundIds,
     message: `Selected ${nodes.length} nodes${notFoundIds.length > 0 ? ` (${notFoundIds.length} not found)` : ''}`
   };
+}
+
+/**
+ * Delete all hidden nodes in the current document or within a specific node
+ * @param {Object} params - Parameters object
+ * @param {string} params.nodeId - Optional node ID to search within. If not provided, searches the entire document
+ * @returns {Object} - Object containing deletion results
+ */
+async function deleteHiddenNodes(params) {
+  const { nodeId } = params || {};
+  const commandId = generateCommandId();
+
+  console.log(`Starting deletion of hidden nodes${nodeId ? ` within node: ${nodeId}` : ' in entire document'}`);
+
+  // Send started progress update
+  sendProgressUpdate(
+    commandId,
+    "delete_hidden_nodes",
+    "started",
+    0,
+    1,
+    0,
+    `Starting scan for hidden nodes${nodeId ? ` within node: ${nodeId}` : ' in entire document'}`,
+    { nodeId }
+  );
+
+  try {
+    let rootNode;
+    
+    if (nodeId) {
+      // Search within specific node
+      rootNode = await figma.getNodeByIdAsync(nodeId);
+      if (!rootNode) {
+        const errorMsg = `Node with ID ${nodeId} not found`;
+        sendProgressUpdate(
+          commandId,
+          "delete_hidden_nodes",
+          "error",
+          0,
+          0,
+          0,
+          errorMsg,
+          { error: errorMsg }
+        );
+        throw new Error(errorMsg);
+      }
+    } else {
+      // Search entire document - use current page as root
+      rootNode = figma.currentPage;
+    }
+
+    // Collect all hidden nodes
+    const hiddenNodes = [];
+    await findHiddenNodes(rootNode, hiddenNodes);
+
+    console.log(`Found ${hiddenNodes.length} hidden nodes`);
+
+    // Send progress update with found nodes count
+    sendProgressUpdate(
+      commandId,
+      "delete_hidden_nodes",
+      "in_progress",
+      20,
+      hiddenNodes.length,
+      0,
+      `Found ${hiddenNodes.length} hidden nodes. Starting deletion...`,
+      { totalHiddenNodes: hiddenNodes.length }
+    );
+
+    if (hiddenNodes.length === 0) {
+      // No hidden nodes found
+      sendProgressUpdate(
+        commandId,
+        "delete_hidden_nodes",
+        "completed",
+        100,
+        0,
+        0,
+        "No hidden nodes found",
+        { totalHiddenNodes: 0, deletedNodes: 0, failedNodes: 0 }
+      );
+
+      return {
+        success: true,
+        message: "No hidden nodes found",
+        totalHiddenNodes: 0,
+        deletedNodes: 0,
+        failedNodes: 0,
+        deletedNodeIds: [],
+        failedNodeIds: []
+      };
+    }
+
+    // Process deletions in chunks to avoid overwhelming Figma
+    const CHUNK_SIZE = 5;
+    const chunks = [];
+    for (let i = 0; i < hiddenNodes.length; i += CHUNK_SIZE) {
+      chunks.push(hiddenNodes.slice(i, i + CHUNK_SIZE));
+    }
+
+    console.log(`Split ${hiddenNodes.length} deletions into ${chunks.length} chunks`);
+
+    const deletedNodeIds = [];
+    const failedNodeIds = [];
+    let deletedCount = 0;
+    let failedCount = 0;
+
+    // Process each chunk sequentially
+    for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
+      const chunk = chunks[chunkIndex];
+      const progress = Math.round(20 + (chunkIndex / chunks.length) * 70);
+
+      console.log(`Processing chunk ${chunkIndex + 1}/${chunks.length} with ${chunk.length} nodes`);
+
+      // Send chunk processing update
+      sendProgressUpdate(
+        commandId,
+        "delete_hidden_nodes",
+        "in_progress",
+        progress,
+        hiddenNodes.length,
+        deletedCount + failedCount,
+        `Processing deletion chunk ${chunkIndex + 1}/${chunks.length}`,
+        {
+          currentChunk: chunkIndex + 1,
+          totalChunks: chunks.length,
+          deletedCount,
+          failedCount
+        }
+      );
+
+      // Process deletions within a chunk in parallel
+      const chunkPromises = chunk.map(async (nodeInfo) => {
+        try {
+          const node = await figma.getNodeByIdAsync(nodeInfo.id);
+          if (node && node.visible === false) {
+            // Double-check that the node is still hidden before deleting
+            node.remove();
+            console.log(`Successfully deleted hidden node: ${nodeInfo.name} (${nodeInfo.id})`);
+            return { success: true, nodeId: nodeInfo.id, nodeName: nodeInfo.name };
+          } else {
+            console.log(`Node ${nodeInfo.id} is no longer hidden or doesn't exist, skipping`);
+            return { success: false, nodeId: nodeInfo.id, nodeName: nodeInfo.name, reason: 'Not hidden or not found' };
+          }
+        } catch (error) {
+          console.error(`Failed to delete hidden node ${nodeInfo.id}:`, error);
+          return { success: false, nodeId: nodeInfo.id, nodeName: nodeInfo.name, error: error.message };
+        }
+      });
+
+      const chunkResults = await Promise.all(chunkPromises);
+
+      // Process results
+      for (const result of chunkResults) {
+        if (result.success) {
+          deletedNodeIds.push(result.nodeId);
+          deletedCount++;
+        } else {
+          failedNodeIds.push(result.nodeId);
+          failedCount++;
+        }
+      }
+
+      // Small delay between chunks to avoid overwhelming Figma
+      if (chunkIndex < chunks.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    }
+
+    // Send completion update
+    sendProgressUpdate(
+      commandId,
+      "delete_hidden_nodes",
+      "completed",
+      100,
+      hiddenNodes.length,
+      deletedCount + failedCount,
+      `Deletion completed. Deleted: ${deletedCount}, Failed: ${failedCount}`,
+      {
+        totalHiddenNodes: hiddenNodes.length,
+        deletedNodes: deletedCount,
+        failedNodes: failedCount,
+        deletedNodeIds,
+        failedNodeIds
+      }
+    );
+
+    const message = `Successfully deleted ${deletedCount} hidden nodes${failedCount > 0 ? `, ${failedCount} failed` : ''}`;
+
+    console.log(`Hidden nodes deletion completed: ${message}`);
+
+    return {
+      success: true,
+      message,
+      totalHiddenNodes: hiddenNodes.length,
+      deletedNodes: deletedCount,
+      failedNodes: failedCount,
+      deletedNodeIds,
+      failedNodeIds
+    };
+
+  } catch (error) {
+    console.error("Error deleting hidden nodes:", error);
+    
+    sendProgressUpdate(
+      commandId,
+      "delete_hidden_nodes",
+      "error",
+      0,
+      0,
+      0,
+      `Error deleting hidden nodes: ${error.message}`,
+      { error: error.message }
+    );
+
+    throw new Error(`Error deleting hidden nodes: ${error.message}`);
+  }
+}
+
+/**
+ * Helper function to recursively find all hidden nodes
+ * @param {SceneNode} node - The root node to start searching from
+ * @param {Array} hiddenNodes - Array to store found hidden nodes
+ */
+async function findHiddenNodes(node, hiddenNodes = []) {
+  // Check if this node is hidden
+  if (node.visible === false) {
+    hiddenNodes.push({
+      id: node.id,
+      name: node.name || `Unnamed ${node.type}`,
+      type: node.type
+    });
+  }
+
+  // Recursively process children of container nodes
+  if ("children" in node) {
+    for (const child of node.children) {
+      await findHiddenNodes(child, hiddenNodes);
+    }
+  }
 }

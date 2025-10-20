@@ -851,7 +851,65 @@ server.tool(
   }
 );
 
-// Export Node as Image Tool
+// Rasterize Node to Image Tool (Convert node to image node in canvas)
+server.tool(
+  "rasterize_node_to_image",
+  "Convert a node to a rasterized image node in Figma canvas by node ID",
+  {
+    nodeId: z.string().describe("The ID of the node to rasterize (e.g., '123:456')"),
+    format: z
+      .enum(["PNG", "JPG"])
+      .optional()
+      .default("PNG")
+      .describe("Image format for rasterization (default: PNG)"),
+    scale: z.number().positive().optional().default(1).describe("Rasterization scale (default: 1)"),
+    replaceOriginal: z.boolean().optional().default(false).describe("Whether to replace the original node with the image"),
+  },
+  async ({ nodeId, format = "PNG", scale = 1, replaceOriginal = false }: any) => {
+    try {
+      const result = await sendCommandToFigma("rasterize_node_to_image", {
+        nodeId,
+        format,
+        scale,
+        replaceOriginal,
+      });
+      
+      const typedResult = result as { 
+        originalNodeId: string;
+        originalNodeName: string;
+        imageNodeId: string;
+        imageNodeName: string;
+        format: string;
+        scale: number;
+        width: number;
+        height: number;
+        replaced: boolean;
+      };
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Successfully rasterized node "${typedResult.originalNodeName}" (${typedResult.originalNodeId}) to image node "${typedResult.imageNodeName}" (${typedResult.imageNodeId})\n` +
+                  `Format: ${typedResult.format}, Scale: ${typedResult.scale}x, Size: ${typedResult.width}×${typedResult.height}px\n` +
+                  `${typedResult.replaced ? 'Original node was replaced' : 'Image node created alongside original'}`,
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error rasterizing node to image: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+// Keep the original export_node_as_image for backward compatibility
 server.tool(
   "export_node_as_image",
   "Export a node as an image from Figma",
@@ -2522,6 +2580,51 @@ server.tool(
   }
 );
 
+// Delete Hidden Nodes Tool
+server.tool(
+  "delete_hidden_nodes",
+  "Delete all hidden nodes in the current document or within a specific node",
+  {
+    nodeId: z.string().optional().describe("Optional node ID to search within. If not provided, searches the entire document"),
+  },
+  async ({ nodeId }: any) => {
+    try {
+      const result = await sendCommandToFigma("delete_hidden_nodes", { nodeId });
+      const typedResult = result as { 
+        success: boolean;
+        message: string;
+        totalHiddenNodes: number;
+        deletedNodes: number;
+        failedNodes: number;
+        deletedNodeIds: string[];
+        failedNodeIds: string[];
+      };
+      
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Hidden nodes deletion completed:
+- Total hidden nodes found: ${typedResult.totalHiddenNodes}
+- Successfully deleted: ${typedResult.deletedNodes}
+- Failed to delete: ${typedResult.failedNodes}
+- Message: ${typedResult.message}`,
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error deleting hidden nodes: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        ],
+      };
+    }
+  }
+);
+
 // Strategy for converting Figma prototype reactions to connector lines
 server.prompt(
   "reaction_to_connector_strategy",
@@ -2623,12 +2726,14 @@ type FigmaCommand =
   | "resize_node"
   | "delete_node"
   | "delete_multiple_nodes"
+  | "delete_hidden_nodes"
   | "get_styles"
   | "get_local_components"
   | "create_component_instance"
   | "get_instance_overrides"
   | "set_instance_overrides"
   | "export_node_as_image"
+  | "rasterize_node_to_image"
   | "join"
   | "set_corner_radius"
   | "clone_node"
@@ -2715,6 +2820,9 @@ type CommandParams = {
   delete_multiple_nodes: {
     nodeIds: string[];
   };
+  delete_hidden_nodes: {
+    nodeId?: string;
+  };
   get_styles: Record<string, never>;
   get_local_components: Record<string, never>;
   get_team_components: Record<string, never>;
@@ -2734,6 +2842,19 @@ type CommandParams = {
     nodeId: string;
     format?: "PNG" | "JPG" | "SVG" | "PDF";
     scale?: number;
+  };
+  export_node_to_image: {
+    nodeId?: string;
+    nodeName?: string;
+    format?: "PNG" | "JPG" | "SVG" | "PDF";
+    scale?: number;
+    searchScope?: "current_page" | "current_selection" | "entire_document";
+  };
+  rasterize_node_to_image: {
+    nodeId: string;
+    format?: "PNG" | "JPG";
+    scale?: number;
+    replaceOriginal?: boolean;
   };
   execute_code: {
     code: string;
