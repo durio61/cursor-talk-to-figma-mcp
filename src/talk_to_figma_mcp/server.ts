@@ -2242,343 +2242,7 @@ server.tool(
   }
 );
 
-// Set Axis Align Tool
-server.tool(
-  "set_axis_align",
-  "Set primary and counter axis alignment for an auto-layout frame in Figma",
-  {
-    nodeId: z.string().describe("The ID of the frame to modify"),
-    primaryAxisAlignItems: z
-      .enum(["MIN", "MAX", "CENTER", "SPACE_BETWEEN"])
-      .optional()
-      .describe("Primary axis alignment (MIN/MAX = left/right in horizontal, top/bottom in vertical). Note: When set to SPACE_BETWEEN, itemSpacing will be ignored as children will be evenly spaced."),
-    counterAxisAlignItems: z
-      .enum(["MIN", "MAX", "CENTER", "BASELINE"])
-      .optional()
-      .describe("Counter axis alignment (MIN/MAX = top/bottom in horizontal, left/right in vertical)")
-  },
-  async ({ nodeId, primaryAxisAlignItems, counterAxisAlignItems }: any) => {
-    try {
-      const result = await sendCommandToFigma("set_axis_align", {
-        nodeId,
-        primaryAxisAlignItems,
-        counterAxisAlignItems
-      });
-      const typedResult = result as { name: string };
-
-      // Create a message about which alignments were set
-      const alignMessages = [];
-      if (primaryAxisAlignItems !== undefined) alignMessages.push(`primary: ${primaryAxisAlignItems}`);
-      if (counterAxisAlignItems !== undefined) alignMessages.push(`counter: ${counterAxisAlignItems}`);
-
-      const alignText = alignMessages.length > 0
-        ? `axis alignment (${alignMessages.join(', ')})`
-        : "axis alignment";
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Set ${alignText} for frame "${typedResult.name}"`,
-          },
-        ],
-      };
-    } catch (error) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Error setting axis alignment: ${error instanceof Error ? error.message : String(error)}`,
-          },
-        ],
-      };
-    }
-  }
-);
-
-// Set Layout Sizing Tool
-server.tool(
-  "set_layout_sizing",
-  "Set horizontal and vertical sizing modes for an auto-layout frame in Figma",
-  {
-    nodeId: z.string().describe("The ID of the frame to modify"),
-    layoutSizingHorizontal: z
-      .enum(["FIXED", "HUG", "FILL"])
-      .optional()
-      .describe("Horizontal sizing mode (HUG for frames/text only, FILL for auto-layout children only)"),
-    layoutSizingVertical: z
-      .enum(["FIXED", "HUG", "FILL"])
-      .optional()
-      .describe("Vertical sizing mode (HUG for frames/text only, FILL for auto-layout children only)")
-  },
-  async ({ nodeId, layoutSizingHorizontal, layoutSizingVertical }: any) => {
-    try {
-      const result = await sendCommandToFigma("set_layout_sizing", {
-        nodeId,
-        layoutSizingHorizontal,
-        layoutSizingVertical
-      });
-      const typedResult = result as { name: string };
-
-      // Create a message about which sizing modes were set
-      const sizingMessages = [];
-      if (layoutSizingHorizontal !== undefined) sizingMessages.push(`horizontal: ${layoutSizingHorizontal}`);
-      if (layoutSizingVertical !== undefined) sizingMessages.push(`vertical: ${layoutSizingVertical}`);
-
-      const sizingText = sizingMessages.length > 0
-        ? `layout sizing (${sizingMessages.join(', ')})`
-        : "layout sizing";
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Set ${sizingText} for frame "${typedResult.name}"`,
-          },
-        ],
-      };
-    } catch (error) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Error setting layout sizing: ${error instanceof Error ? error.message : String(error)}`,
-          },
-        ],
-      };
-    }
-  }
-);
-
-// Set Item Spacing Tool
-server.tool(
-  "set_item_spacing",
-  "Set distance between children in an auto-layout frame",
-  {
-    nodeId: z.string().describe("The ID of the frame to modify"),
-    itemSpacing: z.number().optional().describe("Distance between children. Note: This value will be ignored if primaryAxisAlignItems is set to SPACE_BETWEEN."),
-    counterAxisSpacing: z.number().optional().describe("Distance between wrapped rows/columns. Only works when layoutWrap is set to WRAP.")
-  },
-  async ({ nodeId, itemSpacing, counterAxisSpacing}: any) => {
-    try {
-      const params: any = { nodeId };
-      if (itemSpacing !== undefined) params.itemSpacing = itemSpacing;
-      if (counterAxisSpacing !== undefined) params.counterAxisSpacing = counterAxisSpacing;
-      
-      const result = await sendCommandToFigma("set_item_spacing", params);
-      const typedResult = result as { name: string, itemSpacing?: number, counterAxisSpacing?: number };
-
-      let message = `Updated spacing for frame "${typedResult.name}":`;
-      if (itemSpacing !== undefined) message += ` itemSpacing=${itemSpacing}`;
-      if (counterAxisSpacing !== undefined) message += ` counterAxisSpacing=${counterAxisSpacing}`;
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: message,
-          },
-        ],
-      };
-    } catch (error) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Error setting spacing: ${error instanceof Error ? error.message : String(error)}`,
-          },
-        ],
-      };
-    }
-  }
-);
-
-// A tool to get Figma Prototyping Reactions from multiple nodes
-server.tool(
-  "get_reactions",
-  "Get Figma Prototyping Reactions from multiple nodes. CRITICAL: The output MUST be processed using the 'reaction_to_connector_strategy' prompt IMMEDIATELY to generate parameters for connector lines via the 'create_connections' tool.",
-  {
-    nodeIds: z.array(z.string()).describe("Array of node IDs to get reactions from"),
-  },
-  async ({ nodeIds }: any) => {
-    try {
-      const result = await sendCommandToFigma("get_reactions", { nodeIds });
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result)
-          },
-          {
-            type: "text",
-            text: "IMPORTANT: You MUST now use the reaction data above and follow the `reaction_to_connector_strategy` prompt to prepare the parameters for the `create_connections` tool call. This is a required next step."
-          }
-        ],
-        followUp: {
-          type: "prompt",
-          prompt: "reaction_to_connector_strategy",
-        },
-      };
-    } catch (error) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Error getting reactions: ${error instanceof Error ? error.message : String(error)
-              }`,
-          },
-        ],
-      };
-    }
-  }
-);
-
-// Create Connectors Tool
-server.tool(
-  "set_default_connector",
-  "Set a copied connector node as the default connector",
-  {
-    connectorId: z.string().optional().describe("The ID of the connector node to set as default")
-  },
-  async ({ connectorId }: any) => {
-    try {
-      const result = await sendCommandToFigma("set_default_connector", {
-        connectorId
-      });
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Default connector set: ${JSON.stringify(result)}`
-          }
-        ]
-      };
-    } catch (error) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Error setting default connector: ${error instanceof Error ? error.message : String(error)}`
-          }
-        ]
-      };
-    }
-  }
-);
-
-// Connect Nodes Tool
-server.tool(
-  "create_connections",
-  "Create connections between nodes using the default connector style",
-  {
-    connections: z.array(z.object({
-      startNodeId: z.string().describe("ID of the starting node"),
-      endNodeId: z.string().describe("ID of the ending node"),
-      text: z.string().optional().describe("Optional text to display on the connector")
-    })).describe("Array of node connections to create")
-  },
-  async ({ connections }: any) => {
-    try {
-      if (!connections || connections.length === 0) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: "No connections provided"
-            }
-          ]
-        };
-      }
-
-      const result = await sendCommandToFigma("create_connections", {
-        connections
-      });
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Created ${connections.length} connections: ${JSON.stringify(result)}`
-          }
-        ]
-      };
-    } catch (error) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Error creating connections: ${error instanceof Error ? error.message : String(error)}`
-          }
-        ]
-      };
-    }
-  }
-);
-
-// Set Focus Tool
-server.tool(
-  "set_focus",
-  "Set focus on a specific node in Figma by selecting it and scrolling viewport to it",
-  {
-    nodeId: z.string().describe("The ID of the node to focus on"),
-  },
-  async ({ nodeId }: any) => {
-    try {
-      const result = await sendCommandToFigma("set_focus", { nodeId });
-      const typedResult = result as { name: string; id: string };
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Focused on node "${typedResult.name}" (ID: ${typedResult.id})`,
-          },
-        ],
-      };
-    } catch (error) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Error setting focus: ${error instanceof Error ? error.message : String(error)}`,
-          },
-        ],
-      };
-    }
-  }
-);
-
-// Set Selections Tool
-server.tool(
-  "set_selections",
-  "Set selection to multiple nodes in Figma and scroll viewport to show them",
-  {
-    nodeIds: z.array(z.string()).describe("Array of node IDs to select"),
-  },
-  async ({ nodeIds }: any) => {
-    try {
-      const result = await sendCommandToFigma("set_selections", { nodeIds });
-      const typedResult = result as { selectedNodes: Array<{ name: string; id: string }>; count: number };
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Selected ${typedResult.count} nodes: ${typedResult.selectedNodes.map(node => `"${node.name}" (${node.id})`).join(', ')}`,
-          },
-        ],
-      };
-    } catch (error) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Error setting selections: ${error instanceof Error ? error.message : String(error)}`,
-          },
-        ],
-      };
-    }
-  }
-);
+ 
 
 // Delete Hidden Nodes Tool
 server.tool(
@@ -2618,6 +2282,78 @@ server.tool(
           {
             type: "text",
             text: `Error deleting hidden nodes: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+// Optimize Design Tool
+server.tool(
+  "optimize_design",
+  "Optimize a design node by backing it up, removing hidden nodes, and intelligently rasterizing images/vectors using upward clustering algorithm",
+  {
+    nodeId: z.string().describe("The ID of the node to optimize"),
+  },
+  async ({ nodeId }: any) => {
+    try {
+      const result = await sendCommandToFigma("optimize_design", { nodeId });
+      const typedResult = result as {
+        success: boolean;
+        message: string;
+        backupNodeId: string;
+        backupNodeName: string;
+        statistics: {
+          hiddenNodesDeleted: number;
+          nodesRasterized: number;
+          totalNodeReduction: number;
+          optimizationTimeMs: number;
+        };
+        details: {
+          clusteringResults: Array<{
+            targetNodeId: string;
+            targetNodeName: string;
+            clusterLevel: number;
+            nodeReduction: number;
+            reason: string;
+          }>;
+          hiddenNodeIds: string[];
+          rasterizedNodeIds: string[];
+        };
+      };
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Design optimization completed successfully!
+
+Backup Information:
+- Backup Node ID: ${typedResult.backupNodeId}
+- Backup Node Name: ${typedResult.backupNodeName}
+
+Optimization Statistics:
+- Hidden Nodes Deleted: ${typedResult.statistics.hiddenNodesDeleted}
+- Nodes Rasterized: ${typedResult.statistics.nodesRasterized}
+- Total Node Reduction: ${typedResult.statistics.totalNodeReduction}
+- Optimization Time: ${typedResult.statistics.optimizationTimeMs}ms
+
+Clustering Analysis:
+${typedResult.details.clusteringResults.map(r => 
+  `  • ${r.targetNodeName} (Level ${r.clusterLevel}): Reduced ${r.nodeReduction} nodes - ${r.reason}`
+).join('\n')}
+
+Message: ${typedResult.message}`,
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error optimizing design: ${error instanceof Error ? error.message : String(error)}`,
           },
         ],
       };
@@ -2727,6 +2463,7 @@ type FigmaCommand =
   | "delete_node"
   | "delete_multiple_nodes"
   | "delete_hidden_nodes"
+  | "optimize_design"
   | "get_styles"
   | "get_local_components"
   | "create_component_instance"
@@ -2822,6 +2559,9 @@ type CommandParams = {
   };
   delete_hidden_nodes: {
     nodeId?: string;
+  };
+  optimize_design: {
+    nodeId: string;
   };
   get_styles: Record<string, never>;
   get_local_components: Record<string, never>;
@@ -3125,7 +2865,6 @@ function sendCommandToFigma(
         },
       },
     };
-
     // Set timeout for request
     const timeout = setTimeout(() => {
       if (pendingRequests.has(id)) {

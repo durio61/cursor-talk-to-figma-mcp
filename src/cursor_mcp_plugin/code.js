@@ -141,6 +141,8 @@ async function handleCommand(command, params) {
       return await deleteMultipleNodes(params);
     case "delete_hidden_nodes":
       return await deleteHiddenNodes(params);
+    case "optimize_design":
+      return await optimizeDesign(params);
     case "get_styles":
       return await getStyles();
     case "get_local_components":
@@ -4488,4 +4490,626 @@ async function findHiddenNodes(node, hiddenNodes = []) {
       await findHiddenNodes(child, hiddenNodes);
     }
   }
+}
+
+// ==================== DESIGN OPTIMIZATION FUNCTIONS ====================
+
+/**
+ * Main function: Optimize design by backing up, removing hidden nodes, and intelligently rasterizing
+ * @param {Object} params - Parameters
+ * @param {string} params.nodeId - The ID of the node to optimize
+ * @returns {Object} Optimization report
+ */
+async function optimizeDesign(params) {
+  const { nodeId } = params || {};
+  const commandId = generateCommandId();
+  const startTime = Date.now();
+
+  console.log(`Starting design optimization for node: ${nodeId}`);
+
+  if (!nodeId) {
+    throw new Error("Missing nodeId parameter");
+  }
+
+  // Send started progress update
+  sendProgressUpdate(
+    commandId,
+    "optimize_design",
+    "started",
+    0,
+    100,
+    0,
+    "Starting design optimization...",
+    { nodeId }
+  );
+
+  try {
+    // Phase 1: Backup the node
+    sendProgressUpdate(
+      commandId,
+      "optimize_design",
+      "in_progress",
+      10,
+      100,
+      10,
+      "Phase 1: Creating backup...",
+      { phase: "backup" }
+    );
+
+    const backupResult = await backupNode(nodeId);
+    console.log(`Backup created: ${backupResult.backupNodeId}`);
+
+    // Phase 2: Get backup node for processing
+    const backupNode = await figma.getNodeByIdAsync(backupResult.backupNodeId);
+    if (!backupNode) {
+      throw new Error("Failed to retrieve backup node");
+    }
+
+    // Phase 3: Delete hidden nodes
+    sendProgressUpdate(
+      commandId,
+      "optimize_design",
+      "in_progress",
+      25,
+      100,
+      25,
+      "Phase 2: Removing hidden nodes...",
+      { phase: "delete_hidden" }
+    );
+
+    const hiddenStats = await deleteHiddenNodesInSubtree(backupNode);
+    console.log(`Hidden nodes deleted: ${hiddenStats.deletedCount}`);
+
+    // Phase 4: Scan and classify nodes
+    sendProgressUpdate(
+      commandId,
+      "optimize_design",
+      "in_progress",
+      40,
+      100,
+      40,
+      "Phase 3: Scanning and classifying nodes...",
+      { phase: "scan_classify" }
+    );
+
+    const classification = await scanAndClassifyNodes(backupNode);
+    console.log(`Classification complete: ${classification.vectorNodes.length} vectors, ${classification.imageNodes.length} images`);
+
+    // Phase 5: Upward clustering analysis
+    sendProgressUpdate(
+      commandId,
+      "optimize_design",
+      "in_progress",
+      55,
+      100,
+      55,
+      "Phase 4: Analyzing optimal rasterization targets...",
+      { phase: "clustering" }
+    );
+
+    const rasterizationPlan = await analyzeRasterizationTargets(classification);
+    console.log(`Clustering analysis complete: ${rasterizationPlan.length} targets identified`);
+
+    // Phase 6: Execute rasterization
+    sendProgressUpdate(
+      commandId,
+      "optimize_design",
+      "in_progress",
+      75,
+      100,
+      75,
+      "Phase 5: Executing rasterization...",
+      { phase: "rasterize" }
+    );
+
+    const rasterStats = await executeRasterization(rasterizationPlan, commandId);
+    console.log(`Rasterization complete: ${rasterStats.successCount} nodes rasterized`);
+
+    // Calculate total optimization time
+    const optimizationTimeMs = Date.now() - startTime;
+
+    // Calculate total node reduction
+    const totalNodeReduction = rasterizationPlan.reduce(
+      (sum, plan) => sum + plan.nodeReduction,
+      0
+    ) + hiddenStats.deletedCount;
+
+    // Send completed progress update
+    sendProgressUpdate(
+      commandId,
+      "optimize_design",
+      "completed",
+      100,
+      100,
+      100,
+      `Optimization completed successfully in ${optimizationTimeMs}ms`,
+      {
+        hiddenNodesDeleted: hiddenStats.deletedCount,
+        nodesRasterized: rasterStats.successCount,
+        totalNodeReduction
+      }
+    );
+
+    // Return comprehensive report
+    return {
+      success: true,
+      message: `Design optimization completed successfully. Reduced ${totalNodeReduction} nodes in ${optimizationTimeMs}ms.`,
+      backupNodeId: backupResult.backupNodeId,
+      backupNodeName: backupResult.backupNodeName,
+      statistics: {
+        hiddenNodesDeleted: hiddenStats.deletedCount,
+        nodesRasterized: rasterStats.successCount,
+        totalNodeReduction,
+        optimizationTimeMs
+      },
+      details: {
+        clusteringResults: rasterizationPlan,
+        hiddenNodeIds: hiddenStats.deletedIds,
+        rasterizedNodeIds: rasterStats.rasterizedIds
+      }
+    };
+
+  } catch (error) {
+    console.error("Error in optimizeDesign:", error);
+    
+    sendProgressUpdate(
+      commandId,
+      "optimize_design",
+      "error",
+      0,
+      100,
+      0,
+      `Error: ${error.message}`,
+      { error: error.message }
+    );
+
+    throw new Error(`Design optimization failed: ${error.message}`);
+  }
+}
+
+/**
+ * Phase 1: Backup a node by cloning it
+ * @param {string} nodeId - The ID of the node to backup
+ * @returns {Object} Backup result with backup node ID and name
+ */
+async function backupNode(nodeId) {
+  const originalNode = await figma.getNodeByIdAsync(nodeId);
+  if (!originalNode) {
+    throw new Error(`Node not found with ID: ${nodeId}`);
+  }
+
+  // Clone the node
+  const backupNode = originalNode.clone();
+  
+  // Calculate offset position to avoid overlap
+  const offsetX = ("width" in originalNode) ? originalNode.width + 200 : 200;
+  
+  // Position the backup node
+  if ("x" in backupNode && "y" in backupNode) {
+    if ("x" in originalNode) {
+      backupNode.x = originalNode.x + offsetX;
+    }
+    if ("y" in originalNode) {
+      backupNode.y = originalNode.y;
+    }
+  }
+
+  // Rename to indicate it's a backup
+  backupNode.name = `${originalNode.name} (Optimized Backup)`;
+
+  // Add to the same parent or current page
+  if (originalNode.parent) {
+    originalNode.parent.appendChild(backupNode);
+  } else {
+    figma.currentPage.appendChild(backupNode);
+  }
+
+  console.log(`Backup created: ${backupNode.id} - ${backupNode.name}`);
+
+  return {
+    backupNodeId: backupNode.id,
+    backupNodeName: backupNode.name,
+    originalNodeId: nodeId
+  };
+}
+
+/**
+ * Phase 2: Delete hidden nodes in a subtree (without using the full deleteHiddenNodes function)
+ * @param {SceneNode} rootNode - Root node to search within
+ * @returns {Object} Statistics about deleted nodes
+ */
+async function deleteHiddenNodesInSubtree(rootNode) {
+  const hiddenNodes = [];
+  
+  // Collect hidden nodes recursively
+  function collectHidden(node) {
+    if (node.visible === false) {
+      hiddenNodes.push({
+        id: node.id,
+        name: node.name || `Unnamed ${node.type}`,
+        type: node.type,
+        node: node
+      });
+      return; // Don't traverse children of hidden nodes
+    }
+    
+    if ("children" in node) {
+      for (const child of node.children) {
+        collectHidden(child);
+      }
+    }
+  }
+
+  collectHidden(rootNode);
+
+  // Delete collected hidden nodes
+  const deletedIds = [];
+  let deletedCount = 0;
+
+  for (const hiddenInfo of hiddenNodes) {
+    try {
+      hiddenInfo.node.remove();
+      deletedIds.push(hiddenInfo.id);
+      deletedCount++;
+    } catch (error) {
+      console.error(`Failed to delete hidden node ${hiddenInfo.id}:`, error);
+    }
+  }
+
+  return {
+    deletedCount,
+    deletedIds,
+    totalFound: hiddenNodes.length
+  };
+}
+
+/**
+ * Phase 3: Scan and classify nodes by type
+ * @param {SceneNode} rootNode - Root node to scan
+ * @returns {Object} Classification results
+ */
+async function scanAndClassifyNodes(rootNode) {
+  const classification = {
+    vectorNodes: [],      // SVG/Vector nodes
+    imageNodes: [],       // Nodes with image fills
+    containerNodes: [],   // Frame/Group containers
+    textNodes: [],        // Text nodes
+    componentNodes: []    // Component/Instance nodes
+  };
+
+  function classifyNode(node) {
+    switch (node.type) {
+      case "VECTOR":
+      case "STAR":
+      case "LINE":
+      case "ELLIPSE":
+      case "POLYGON":
+      case "BOOLEAN_OPERATION":
+        classification.vectorNodes.push(node);
+        break;
+
+      case "RECTANGLE":
+        // Check if it has image fill
+        if (hasImageFill(node)) {
+          classification.imageNodes.push(node);
+        } else {
+          classification.containerNodes.push(node);
+        }
+        break;
+
+      case "TEXT":
+        classification.textNodes.push(node);
+        break;
+
+      case "COMPONENT":
+      case "INSTANCE":
+      case "COMPONENT_SET":
+        classification.componentNodes.push(node);
+        break;
+
+      case "FRAME":
+      case "GROUP":
+        classification.containerNodes.push(node);
+        break;
+    }
+
+    // Recursively classify children
+    if ("children" in node && node.children) {
+      for (const child of node.children) {
+        classifyNode(child);
+      }
+    }
+  }
+
+  classifyNode(rootNode);
+
+  return classification;
+}
+
+/**
+ * Helper: Check if a node has an image fill
+ * @param {SceneNode} node - Node to check
+ * @returns {boolean} True if node has image fill
+ */
+function hasImageFill(node) {
+  if (!("fills" in node) || !node.fills) {
+    return false;
+  }
+
+  const fills = Array.isArray(node.fills) ? node.fills : [node.fills];
+  
+  return fills.some(fill => 
+    fill && typeof fill === 'object' && fill.type === "IMAGE"
+  );
+}
+
+/**
+ * Phase 4: Analyze rasterization targets using upward clustering
+ * @param {Object} classification - Node classification results
+ * @returns {Array} Array of rasterization targets
+ */
+async function analyzeRasterizationTargets(classification) {
+  const targets = new Map(); // Use Map to avoid duplicates
+
+  // Process vector nodes
+  for (const vectorNode of classification.vectorNodes) {
+    const target = await findOptimalRasterizationTarget(vectorNode);
+    if (target && !targets.has(target.targetNodeId)) {
+      targets.set(target.targetNodeId, target);
+    }
+  }
+
+  // Process image nodes
+  for (const imageNode of classification.imageNodes) {
+    const target = await findOptimalRasterizationTarget(imageNode);
+    if (target && !targets.has(target.targetNodeId)) {
+      targets.set(target.targetNodeId, target);
+    }
+  }
+
+  return Array.from(targets.values());
+}
+
+/**
+ * Core Algorithm: Find optimal rasterization target using upward clustering
+ * @param {SceneNode} node - Starting node (image or vector)
+ * @returns {Object} Optimal rasterization target info
+ */
+async function findOptimalRasterizationTarget(node) {
+  const MAX_CLUSTER_LEVELS = 8; // Maximum levels to climb
+  
+  let currentNode = node;
+  let optimalTarget = node;
+  let maxClusterLevel = 0;
+
+  // Climb up the hierarchy
+  for (let level = 1; level <= MAX_CLUSTER_LEVELS; level++) {
+    if (!currentNode.parent) {
+      break; // Reached root
+    }
+
+    const parent = currentNode.parent;
+
+    // Stop at page or document level
+    if (parent.type === "PAGE" || parent.type === "DOCUMENT") {
+      break;
+    }
+
+    // Check if all siblings are visual-only nodes
+    const canCluster = await canClusterAtParent(parent);
+
+    if (canCluster) {
+      // Parent can be clustered
+      optimalTarget = parent;
+      maxClusterLevel = level;
+      currentNode = parent; // Continue climbing
+    } else {
+      // Cannot cluster further, stop here
+      break;
+    }
+  }
+
+  // Calculate node reduction benefit
+  const nodeReduction = countDescendants(optimalTarget);
+
+  return {
+    targetNodeId: optimalTarget.id,
+    targetNodeName: optimalTarget.name || `Unnamed ${optimalTarget.type}`,
+    clusterLevel: maxClusterLevel,
+    nodeReduction: nodeReduction > 1 ? nodeReduction - 1 : 0, // -1 because the node itself becomes 1 image
+    reason: maxClusterLevel > 0 
+      ? `Clustered ${maxClusterLevel} levels up, reducing ${nodeReduction} nodes to 1 image`
+      : "Cannot cluster (parent has non-visual children), rasterizing self"
+  };
+}
+
+/**
+ * Helper: Check if all children of a parent are visual-only nodes
+ * @param {SceneNode} parent - Parent node to check
+ * @returns {boolean} True if can cluster at this parent
+ */
+async function canClusterAtParent(parent) {
+  if (!("children" in parent) || !parent.children) {
+    return false;
+  }
+
+  // Check all children
+  for (const child of parent.children) {
+    if (!isVisualOnlyNode(child)) {
+      return false; // Found a non-visual child
+    }
+  }
+
+  return true; // All children are visual-only
+}
+
+/**
+ * Helper: Check if a node is purely visual (no text, no interactivity)
+ * @param {SceneNode} node - Node to check
+ * @returns {boolean} True if node is visual-only
+ */
+function isVisualOnlyNode(node) {
+  // Pure visual types
+  const visualTypes = [
+    "VECTOR",
+    "RECTANGLE",
+    "ELLIPSE",
+    "POLYGON",
+    "STAR",
+    "LINE",
+    "BOOLEAN_OPERATION"
+  ];
+
+  if (visualTypes.includes(node.type)) {
+    return true;
+  }
+
+  // Containers need recursive checking
+  if (node.type === "FRAME" || node.type === "GROUP") {
+    if (!("children" in node) || !node.children || node.children.length === 0) {
+      return true; // Empty container is visual-only
+    }
+
+    // Check all children recursively
+    return node.children.every(child => isVisualOnlyNode(child));
+  }
+
+  // These are NOT visual-only
+  const nonVisualTypes = [
+    "TEXT",
+    "COMPONENT",
+    "INSTANCE",
+    "COMPONENT_SET"
+  ];
+
+  if (nonVisualTypes.includes(node.type)) {
+    return false;
+  }
+
+  // Default to visual-only for unknown types
+  return true;
+}
+
+/**
+ * Helper: Count total descendants of a node
+ * @param {SceneNode} node - Node to count
+ * @returns {number} Total descendant count (including self)
+ */
+function countDescendants(node) {
+  let count = 1; // Count self
+
+  if ("children" in node && node.children) {
+    for (const child of node.children) {
+      count += countDescendants(child);
+    }
+  }
+
+  return count;
+}
+
+/**
+ * Phase 5: Execute rasterization on target nodes
+ * @param {Array} rasterizationPlan - Array of rasterization targets
+ * @param {string} commandId - Command ID for progress updates
+ * @returns {Object} Rasterization statistics
+ */
+async function executeRasterization(rasterizationPlan, commandId) {
+  const processedNodeIds = new Set();
+  const rasterizedIds = [];
+  let successCount = 0;
+  let failedCount = 0;
+
+  // Sort by hierarchy depth (process parent nodes first to avoid redundant work)
+  const sortedPlan = rasterizationPlan.sort((a, b) => a.clusterLevel - b.clusterLevel);
+
+  const totalTargets = sortedPlan.length;
+
+  for (let i = 0; i < sortedPlan.length; i++) {
+    const target = sortedPlan[i];
+
+    // Check if node still exists (might have been removed by parent rasterization)
+    const node = await figma.getNodeByIdAsync(target.targetNodeId);
+    if (!node) {
+      console.log(`Node ${target.targetNodeId} no longer exists, skipping`);
+      continue;
+    }
+
+    // Check if already processed
+    if (processedNodeIds.has(target.targetNodeId)) {
+      console.log(`Node ${target.targetNodeId} already processed, skipping`);
+      continue;
+    }
+
+    // Send progress update
+    const progress = Math.round((i / totalTargets) * 100);
+    sendProgressUpdate(
+      commandId,
+      "optimize_design",
+      "in_progress",
+      75 + Math.round(progress * 0.2), // 75-95% range
+      totalTargets,
+      i,
+      `Rasterizing ${i + 1}/${totalTargets}: ${target.targetNodeName}`,
+      { currentTarget: target.targetNodeName }
+    );
+
+    try {
+      // Determine scale based on node size
+      const scale = getOptimalScale(node);
+
+      // Perform rasterization
+      await rasterizeNodeToImage({
+        nodeId: target.targetNodeId,
+        format: "PNG",
+        scale: scale,
+        replaceOriginal: true
+      });
+
+      processedNodeIds.add(target.targetNodeId);
+      rasterizedIds.push(target.targetNodeId);
+      successCount++;
+
+      console.log(`Successfully rasterized: ${target.targetNodeName} (scale: ${scale})`);
+    } catch (error) {
+      console.error(`Failed to rasterize ${target.targetNodeName}:`, error);
+      failedCount++;
+    }
+
+    // Small delay to prevent overwhelming Figma
+    await sleep(50);
+  }
+
+  return {
+    successCount,
+    failedCount,
+    rasterizedIds,
+    totalTargets
+  };
+}
+
+/**
+ * Helper: Get optimal scale based on node size
+ * @param {SceneNode} node - Node to check
+ * @returns {number} Optimal scale factor
+ */
+function getOptimalScale(node) {
+  // Fixed scale strategy: Always use 2x for Retina displays
+  return 2;
+}
+
+/**
+ * Helper: Sleep for specified milliseconds
+ * @param {number} ms - Milliseconds to sleep
+ * @returns {Promise} Promise that resolves after sleep
+ */
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Helper: Generate a unique command ID
+ * @returns {string} Unique command ID
+ */
+function generateCommandId() {
+  return `cmd_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 }
