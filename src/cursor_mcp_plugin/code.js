@@ -4540,8 +4540,8 @@ async function optimizeDesign(params) {
     console.log(`Backup created: ${backupResult.backupNodeId}`);
 
     // Phase 2: Get backup node for processing
-    const backupNode = await figma.getNodeByIdAsync(backupResult.backupNodeId);
-    if (!backupNode) {
+    const backupNodeInstance = await figma.getNodeByIdAsync(backupResult.backupNodeId);
+    if (!backupNodeInstance) {
       throw new Error("Failed to retrieve backup node");
     }
 
@@ -4557,7 +4557,7 @@ async function optimizeDesign(params) {
       { phase: "delete_hidden" }
     );
 
-    const hiddenStats = await deleteHiddenNodesInSubtree(backupNode);
+    const hiddenStats = await deleteHiddenNodesInSubtree(backupNodeInstance);
     console.log(`Hidden nodes deleted: ${hiddenStats.deletedCount}`);
 
     // Phase 4: Scan and classify nodes
@@ -4572,8 +4572,8 @@ async function optimizeDesign(params) {
       { phase: "scan_classify" }
     );
 
-    const classification = await scanAndClassifyNodes(backupNode);
-    console.log(`Classification complete: ${classification.vectorNodes.length} vectors, ${classification.imageNodes.length} images`);
+    const classification = await scanAndClassifyNodes(backupNodeInstance);
+    console.log(`Classification complete: ${classification.vectorNodes.length} vectors, ${classification.imageNodes.length} images, ${classification.specialNameNodes.length} special name nodes`);
 
     // Phase 5: Upward clustering analysis
     sendProgressUpdate(
@@ -4681,36 +4681,93 @@ async function backupNode(nodeId) {
   // Clone the node
   const backupNode = originalNode.clone();
   
-  // Calculate offset position to avoid overlap
-  const offsetX = ("width" in originalNode) ? originalNode.width + 200 : 200;
+  // Find an empty position on the current page
+  const emptyPosition = findEmptyPositionOnPage(figma.currentPage, backupNode);
   
-  // Position the backup node
+  // Position the backup node in empty space
   if ("x" in backupNode && "y" in backupNode) {
-    if ("x" in originalNode) {
-      backupNode.x = originalNode.x + offsetX;
-    }
-    if ("y" in originalNode) {
-      backupNode.y = originalNode.y;
-    }
+    backupNode.x = emptyPosition.x;
+    backupNode.y = emptyPosition.y;
   }
 
   // Rename to indicate it's a backup
   backupNode.name = `${originalNode.name} (Optimized Backup)`;
 
-  // Add to the same parent or current page
-  if (originalNode.parent) {
-    originalNode.parent.appendChild(backupNode);
-  } else {
-    figma.currentPage.appendChild(backupNode);
-  }
+  // Add to current page (not to the same parent to avoid clutter)
+  figma.currentPage.appendChild(backupNode);
 
-  console.log(`Backup created: ${backupNode.id} - ${backupNode.name}`);
+  console.log(`Backup created at position (${emptyPosition.x}, ${emptyPosition.y}): ${backupNode.id} - ${backupNode.name}`);
 
   return {
     backupNodeId: backupNode.id,
     backupNodeName: backupNode.name,
-    originalNodeId: nodeId
+    originalNodeId: nodeId,
+    backupPosition: emptyPosition
   };
+}
+
+/**
+ * Helper: Find an empty position on the page to place backup node
+ * @param {PageNode} page - The page to analyze
+ * @param {SceneNode} nodeToPlace - The node that needs positioning
+ * @returns {Object} Position {x, y}
+ */
+function findEmptyPositionOnPage(page, nodeToPlace) {
+  // Get dimensions of the node to place
+  const nodeWidth = ("width" in nodeToPlace) ? nodeToPlace.width : 300;
+  const nodeHeight = ("height" in nodeToPlace) ? nodeToPlace.height : 300;
+  
+  // Calculate bounding box of all nodes on the page
+  let maxX = 0;
+  let maxY = 0;
+  let minX = 0;
+  let minY = 0;
+  
+  // Traverse all top-level children to find boundaries
+  if (page.children && page.children.length > 0) {
+    for (const child of page.children) {
+      if ("x" in child && "y" in child && "width" in child && "height" in child) {
+        const childRight = child.x + child.width;
+        const childBottom = child.y + child.height;
+        
+        maxX = Math.max(maxX, childRight);
+        maxY = Math.max(maxY, childBottom);
+        minX = Math.min(minX, child.x);
+        minY = Math.min(minY, child.y);
+      }
+    }
+    
+    // Add padding
+    const padding = 500;
+    
+    // Strategy 1: Place to the right of all content
+    const rightPosition = {
+      x: maxX + padding,
+      y: Math.max(0, minY) // Align with top of content
+    };
+    
+    // Strategy 2: Place below all content
+    const bottomPosition = {
+      x: Math.max(0, minX), // Align with left of content
+      y: maxY + padding
+    };
+    
+    // Choose the position that's closer to origin (0, 0)
+    const rightDistance = Math.sqrt(rightPosition.x * rightPosition.x + rightPosition.y * rightPosition.y);
+    const bottomDistance = Math.sqrt(bottomPosition.x * bottomPosition.x + bottomPosition.y * bottomPosition.y);
+    
+    if (rightDistance <= bottomDistance) {
+      console.log(`Placing backup to the right of content at (${rightPosition.x}, ${rightPosition.y})`);
+      return rightPosition;
+    } else {
+      console.log(`Placing backup below content at (${bottomPosition.x}, ${bottomPosition.y})`);
+      return bottomPosition;
+    }
+  } else {
+    // Empty page, place at origin with offset
+    console.log("Page is empty, placing backup at (1000, 0)");
+    return { x: 1000, y: 0 };
+  }
 }
 
 /**
@@ -4774,10 +4831,26 @@ async function scanAndClassifyNodes(rootNode) {
     imageNodes: [],       // Nodes with image fills
     containerNodes: [],   // Frame/Group containers
     textNodes: [],        // Text nodes
-    componentNodes: []    // Component/Instance nodes
+    componentNodes: [],   // Component/Instance nodes
+    specialNameNodes: []  // Nodes with special names that need rasterization
   };
 
+  // Special names that should be rasterized
+  const specialNames = ["nav2", "HomeIndicator"];
+
   function classifyNode(node) {
+    // Check if node has a special name that requires rasterization
+    const nodeName = node.name || "";
+    const hasSpecialName = specialNames.some(specialName => 
+      nodeName.toLowerCase() === specialName.toLowerCase() ||
+      nodeName.toLowerCase().includes(specialName.toLowerCase())
+    );
+
+    if (hasSpecialName) {
+      classification.specialNameNodes.push(node);
+      console.log(`Found special name node: ${node.name} (${node.type})`);
+    }
+
     switch (node.type) {
       case "VECTOR":
       case "STAR":
@@ -4850,6 +4923,21 @@ function hasImageFill(node) {
  */
 async function analyzeRasterizationTargets(classification) {
   const targets = new Map(); // Use Map to avoid duplicates
+
+  // Process special name nodes first (no clustering, direct rasterization)
+  for (const specialNode of classification.specialNameNodes) {
+    if (!targets.has(specialNode.id)) {
+      const nodeCount = countDescendants(specialNode);
+      targets.set(specialNode.id, {
+        targetNodeId: specialNode.id,
+        targetNodeName: specialNode.name || `Unnamed ${specialNode.type}`,
+        clusterLevel: 0,
+        nodeReduction: nodeCount > 1 ? nodeCount - 1 : 0,
+        reason: `Special name node "${specialNode.name}" - forced rasterization`
+      });
+      console.log(`Added special name node for rasterization: ${specialNode.name}`);
+    }
+  }
 
   // Process vector nodes
   for (const vectorNode of classification.vectorNodes) {
