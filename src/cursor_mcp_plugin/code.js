@@ -5342,10 +5342,10 @@ async function collectChildNodes(node, nodesToAnalyze, currentDepth, maxDepth) {
 async function analyzeSingleNodeSpatialRelationship(node, depth) {
   // Get node's bounding box
   const boundingBox = {
-    x: node.absoluteBoundingBox?.x || node.x || 0,
-    y: node.absoluteBoundingBox?.y || node.y || 0,
-    width: node.absoluteBoundingBox?.width || node.width || 0,
-    height: node.absoluteBoundingBox?.height || node.height || 0
+    x: node.absoluteBoundingBox?.x ?? node.x ?? 0,
+    y: node.absoluteBoundingBox?.y ?? node.y ?? 0,
+    width: node.absoluteBoundingBox?.width ?? node.width ?? 0,
+    height: node.absoluteBoundingBox?.height ?? node.height ?? 0
   };
 
   // Initialize result object
@@ -5435,10 +5435,10 @@ async function findAdjacentElements(node, boundingBox) {
 
   for (const candidate of candidates) {
     const candidateBoundingBox = {
-      x: candidate.absoluteBoundingBox?.x || candidate.x || 0,
-      y: candidate.absoluteBoundingBox?.y || candidate.y || 0,
-      width: candidate.absoluteBoundingBox?.width || candidate.width || 0,
-      height: candidate.absoluteBoundingBox?.height || candidate.height || 0
+      x: candidate.absoluteBoundingBox?.x ?? candidate.x ?? 0,
+      y: candidate.absoluteBoundingBox?.y ?? candidate.y ?? 0,
+      width: candidate.absoluteBoundingBox?.width ?? candidate.width ?? 0,
+      height: candidate.absoluteBoundingBox?.height ?? candidate.height ?? 0
     };
 
     // Check left direction
