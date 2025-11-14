@@ -5220,6 +5220,8 @@ async function analyzeSpatialRelationships(params) {
   }
 
   const commandId = generateCommandId();
+  const startTime = Date.now();
+  const MAX_EXECUTION_TIME = 30000; // 30 seconds timeout
   
   try {
     sendProgressUpdate(
@@ -5240,14 +5242,44 @@ async function analyzeSpatialRelationships(params) {
 
     // Collect all nodes to analyze
     const nodesToAnalyze = [];
+    const visitedNodes = new Set(); // Prevent infinite loops
     
     // Add the target node itself
     nodesToAnalyze.push({ node: targetNode, depth: 0 });
+    visitedNodes.add(targetNode.id);
     
     // Recursively collect children if requested
     if (includeChildren) {
-      await collectChildNodes(targetNode, nodesToAnalyze, 0, maxDepth);
+      await collectChildNodes(targetNode, nodesToAnalyze, 0, maxDepth, visitedNodes);
     }
+
+    const totalNodes = nodesToAnalyze.length;
+    
+    // Limit the number of nodes to prevent excessive processing
+    const MAX_NODES = 500;
+    if (totalNodes > MAX_NODES) {
+      console.warn(`Too many nodes to analyze (${totalNodes}), limiting to ${MAX_NODES}`);
+      nodesToAnalyze.splice(MAX_NODES);
+    }
+
+    sendProgressUpdate(
+      commandId,
+      "analyze_spatial_relationships", 
+      "in_progress",
+      0.1,
+      nodesToAnalyze.length,
+      0,
+      `Found ${nodesToAnalyze.length} nodes to analyze. Collecting artboard nodes...`
+    );
+
+    // **OPTIMIZATION: Find the artboard (design frame) boundary and collect nodes within it**
+    // This prevents cross-artboard spatial relationships
+    const artboardRoot = findArtboardRoot(targetNode);
+    console.log(`Artboard root found: ${artboardRoot.name} (${artboardRoot.type})`);
+    
+    console.log("Collecting nodes within current artboard (this may take a moment for large artboards)...");
+    const allArtboardNodes = await getAllNodesInSubtree(artboardRoot);
+    console.log(`Total nodes in artboard: ${allArtboardNodes.length}`);
 
     sendProgressUpdate(
       commandId,
@@ -5256,7 +5288,7 @@ async function analyzeSpatialRelationships(params) {
       0.2,
       nodesToAnalyze.length,
       0,
-      `Found ${nodesToAnalyze.length} nodes to analyze`
+      `Collected ${allArtboardNodes.length} nodes from artboard "${artboardRoot.name}". Starting analysis...`
     );
 
     // Analyze spatial relationships for each node
@@ -5264,26 +5296,59 @@ async function analyzeSpatialRelationships(params) {
     let processedCount = 0;
 
     for (const { node, depth } of nodesToAnalyze) {
-      try {
-        const spatialInfo = await analyzeSingleNodeSpatialRelationship(node, depth);
-        results.push(spatialInfo);
-        
-        processedCount++;
+      // Check timeout
+      if (Date.now() - startTime > MAX_EXECUTION_TIME) {
+        console.warn("Spatial analysis timeout reached, returning partial results");
         sendProgressUpdate(
           commandId,
           "analyze_spatial_relationships",
-          "in_progress", 
-          0.2 + (0.7 * processedCount / nodesToAnalyze.length),
+          "completed",
+          1,
           nodesToAnalyze.length,
           processedCount,
-          `Analyzed ${processedCount}/${nodesToAnalyze.length} nodes`
+          `Timeout reached. Completed ${processedCount}/${nodesToAnalyze.length} nodes`
         );
+        
+        return {
+          partial: true,
+          message: `Analysis timeout. Completed ${processedCount} of ${nodesToAnalyze.length} nodes.`,
+          results: results
+        };
+      }
+
+      try {
+        // Pass allArtboardNodes to avoid recollecting for each node
+        const spatialInfo = await analyzeSingleNodeSpatialRelationship(node, depth, allArtboardNodes);
+        results.push(spatialInfo);
+        
+        processedCount++;
+        
+        // Update progress every 10 nodes or at key milestones
+        if (processedCount % 10 === 0 || processedCount === nodesToAnalyze.length) {
+          sendProgressUpdate(
+            commandId,
+            "analyze_spatial_relationships",
+            "in_progress", 
+            0.2 + (0.7 * processedCount / nodesToAnalyze.length),
+            nodesToAnalyze.length,
+            processedCount,
+            `Analyzed ${processedCount}/${nodesToAnalyze.length} nodes`
+          );
+        }
       } catch (error) {
         console.error(`Error analyzing node ${node.id}: ${error.message}`);
         // Continue with other nodes even if one fails
         processedCount++;
       }
+
+      // Small delay every 50 nodes to prevent UI freezing
+      if (processedCount % 50 === 0) {
+        await delay(50);
+      }
     }
+
+    const executionTime = Date.now() - startTime;
+    console.log(`Spatial analysis completed in ${executionTime}ms`);
 
     sendProgressUpdate(
       commandId,
@@ -5292,12 +5357,13 @@ async function analyzeSpatialRelationships(params) {
       1,
       nodesToAnalyze.length,
       processedCount,
-      `Completed spatial analysis for ${results.length} nodes`
+      `Completed spatial analysis for ${results.length} nodes in ${executionTime}ms`
     );
 
     return results;
 
   } catch (error) {
+    console.error("Spatial analysis error:", error);
     sendProgressUpdate(
       commandId,
       "analyze_spatial_relationships", 
@@ -5312,23 +5378,100 @@ async function analyzeSpatialRelationships(params) {
 }
 
 /**
+ * Find the artboard (design frame) root that contains the given node
+ * This prevents cross-artboard spatial relationships
+ * @param {Object} node - Starting node
+ * @returns {Object} The artboard root node
+ */
+function findArtboardRoot(node) {
+  let current = node;
+  let artboardRoot = node;
+  
+  // Climb up the hierarchy to find the topmost Frame that's a direct child of the page
+  while (current && current.parent) {
+    const parent = current.parent;
+    
+    // If parent is PAGE, current node is the artboard root
+    if (parent.type === "PAGE") {
+      artboardRoot = current;
+      break;
+    }
+    
+    // If current is a top-level Frame, it's likely an artboard
+    if (current.type === "FRAME" && parent.type === "PAGE") {
+      artboardRoot = current;
+      break;
+    }
+    
+    current = parent;
+  }
+  
+  console.log(`Found artboard root: ${artboardRoot.name} (${artboardRoot.type}), starting from: ${node.name}`);
+  return artboardRoot;
+}
+
+/**
+ * Collect all nodes within a subtree (including the root)
+ * @param {Object} rootNode - Root node to start collection
+ * @returns {Promise<Array>} Array of all nodes in the subtree
+ */
+async function getAllNodesInSubtree(rootNode) {
+  const allNodes = [];
+  const visitedIds = new Set(); // Prevent infinite loops
+  
+  function collectNodes(node) {
+    // Skip if already visited
+    if (visitedIds.has(node.id)) {
+      return;
+    }
+    
+    visitedIds.add(node.id);
+    allNodes.push(node);
+    
+    // Recursively collect children
+    if ("children" in node && node.children) {
+      for (const child of node.children) {
+        collectNodes(child);
+      }
+    }
+  }
+  
+  collectNodes(rootNode);
+  return allNodes;
+}
+
+/**
  * Recursively collect child nodes up to maxDepth
  * @param {Object} node - Parent node
  * @param {Array} nodesToAnalyze - Array to collect nodes
  * @param {number} currentDepth - Current depth in the tree
  * @param {number} maxDepth - Maximum depth to traverse
+ * @param {Set} visitedNodes - Set of visited node IDs to prevent infinite loops
  */
-async function collectChildNodes(node, nodesToAnalyze, currentDepth, maxDepth) {
+async function collectChildNodes(node, nodesToAnalyze, currentDepth, maxDepth, visitedNodes) {
+  // Stop if max depth reached
   if (maxDepth !== -1 && currentDepth >= maxDepth) {
+    return;
+  }
+
+  // Stop if too many nodes collected (safety limit)
+  if (nodesToAnalyze.length > 1000) {
+    console.warn("Node collection limit reached (1000 nodes)");
     return;
   }
 
   if ("children" in node && node.children) {
     for (const child of node.children) {
+      // Skip if already visited (prevent infinite loops)
+      if (visitedNodes.has(child.id)) {
+        continue;
+      }
+      
+      visitedNodes.add(child.id);
       nodesToAnalyze.push({ node: child, depth: currentDepth + 1 });
       
       // Recursively collect grandchildren
-      await collectChildNodes(child, nodesToAnalyze, currentDepth + 1, maxDepth);
+      await collectChildNodes(child, nodesToAnalyze, currentDepth + 1, maxDepth, visitedNodes);
     }
   }
 }
@@ -5337,15 +5480,16 @@ async function collectChildNodes(node, nodesToAnalyze, currentDepth, maxDepth) {
  * Analyze spatial relationship for a single node
  * @param {Object} node - The node to analyze
  * @param {number} depth - Depth in the hierarchy
+ * @param {Array} allContextNodes - Pre-collected array of all nodes in context (artboard or page) (optional)
  * @returns {Promise<Object>} Spatial relationship information
  */
-async function analyzeSingleNodeSpatialRelationship(node, depth) {
+async function analyzeSingleNodeSpatialRelationship(node, depth, allContextNodes = null) {
   // Get node's bounding box
   const boundingBox = {
-    x: node.absoluteBoundingBox?.x ?? node.x ?? 0,
-    y: node.absoluteBoundingBox?.y ?? node.y ?? 0,
-    width: node.absoluteBoundingBox?.width ?? node.width ?? 0,
-    height: node.absoluteBoundingBox?.height ?? node.height ?? 0
+    x: (node.absoluteBoundingBox && node.absoluteBoundingBox.x != null) ? node.absoluteBoundingBox.x : (node.x || 0),
+    y: (node.absoluteBoundingBox && node.absoluteBoundingBox.y != null) ? node.absoluteBoundingBox.y : (node.y || 0),
+    width: (node.absoluteBoundingBox && node.absoluteBoundingBox.width != null) ? node.absoluteBoundingBox.width : (node.width || 0),
+    height: (node.absoluteBoundingBox && node.absoluteBoundingBox.height != null) ? node.absoluteBoundingBox.height : (node.height || 0)
   };
 
   // Initialize result object
@@ -5365,8 +5509,8 @@ async function analyzeSingleNodeSpatialRelationship(node, depth) {
     downDistance: -1
   };
 
-  // Find adjacent elements in all directions
-  const adjacentElements = await findAdjacentElements(node, boundingBox);
+  // Find adjacent elements in all directions (pass pre-collected nodes if available)
+  const adjacentElements = await findAdjacentElements(node, boundingBox, allContextNodes);
   
   // Set the closest elements and distances
   if (adjacentElements.left) {
@@ -5413,12 +5557,13 @@ async function analyzeSingleNodeSpatialRelationship(node, depth) {
 }
 
 /**
- * Find adjacent elements in all four directions
+ * Find adjacent elements in all four directions (within the same artboard/context)
  * @param {Object} node - The target node
  * @param {Object} boundingBox - Node's bounding box
+ * @param {Array} allContextNodes - Pre-collected array of all nodes in context (optional)
  * @returns {Promise<Object>} Adjacent elements in all directions
  */
-async function findAdjacentElements(node, boundingBox) {
+async function findAdjacentElements(node, boundingBox, allContextNodes = null) {
   const result = {
     left: null,
     right: null, 
@@ -5426,19 +5571,18 @@ async function findAdjacentElements(node, boundingBox) {
     down: null
   };
 
-  // Get all potential candidates from the current page
-  // We need to search through all nodes on the current page
-  const allNodes = await getAllNodesOnCurrentPage();
+  // Use pre-collected nodes if available, otherwise collect from current page (fallback)
+  const allNodes = allContextNodes || await getAllNodesOnCurrentPage();
   
   // Filter out the current node and find closest in each direction
   const candidates = allNodes.filter(candidate => candidate.id !== node.id);
 
   for (const candidate of candidates) {
     const candidateBoundingBox = {
-      x: candidate.absoluteBoundingBox?.x ?? candidate.x ?? 0,
-      y: candidate.absoluteBoundingBox?.y ?? candidate.y ?? 0,
-      width: candidate.absoluteBoundingBox?.width ?? candidate.width ?? 0,
-      height: candidate.absoluteBoundingBox?.height ?? candidate.height ?? 0
+      x: (candidate.absoluteBoundingBox && candidate.absoluteBoundingBox.x != null) ? candidate.absoluteBoundingBox.x : (candidate.x || 0),
+      y: (candidate.absoluteBoundingBox && candidate.absoluteBoundingBox.y != null) ? candidate.absoluteBoundingBox.y : (candidate.y || 0),
+      width: (candidate.absoluteBoundingBox && candidate.absoluteBoundingBox.width != null) ? candidate.absoluteBoundingBox.width : (candidate.width || 0),
+      height: (candidate.absoluteBoundingBox && candidate.absoluteBoundingBox.height != null) ? candidate.absoluteBoundingBox.height : (candidate.height || 0)
     };
 
     // Check left direction

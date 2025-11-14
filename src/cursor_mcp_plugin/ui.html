@@ -626,10 +626,10 @@
           // If no node ID provided, get the selected node
           if (!nodeId) {
             const selectionData = await sendCommandToPlugin("get_selection");
-            if (!selectionData?.selection?.length) {
+            if (!selectionData || !selectionData.selection || selectionData.selection.length === 0) {
               throw new Error("No node selected and no node ID provided. Please select a node in Figma or enter a node ID.");
             }
-            if (!selectionData.selection[0]?.id) {
+            if (!selectionData.selection[0] || !selectionData.selection[0].id) {
               throw new Error("Selected node is invalid or has no ID. Please select a valid node in Figma.");
             }
             nodeId = selectionData.selection[0].id;
