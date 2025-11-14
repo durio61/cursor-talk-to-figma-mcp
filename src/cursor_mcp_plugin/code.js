@@ -239,6 +239,8 @@ async function handleCommand(command, params) {
       return await setFocus(params);
     case "set_selections":
       return await setSelections(params);
+    case "analyze_spatial_relationships":
+      return await analyzeSpatialRelationships(params);
     default:
       throw new Error(`Unknown command: ${command}`);
   }
@@ -5200,4 +5202,360 @@ function sleep(ms) {
  */
 function generateCommandId() {
   return `cmd_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+}
+
+/**
+ * Analyze spatial relationships of a node and all its children
+ * @param {Object} params - Parameters object
+ * @param {string} params.nodeId - Target node ID
+ * @param {boolean} params.includeChildren - Whether to include children analysis
+ * @param {number} params.maxDepth - Maximum recursion depth
+ * @returns {Promise<Array>} Array of spatial analysis results
+ */
+async function analyzeSpatialRelationships(params) {
+  const { nodeId, includeChildren = true, maxDepth = -1 } = params || {};
+
+  if (!nodeId) {
+    throw new Error("Missing nodeId parameter");
+  }
+
+  const commandId = generateCommandId();
+  
+  try {
+    sendProgressUpdate(
+      commandId,
+      "analyze_spatial_relationships",
+      "started",
+      0,
+      1,
+      0,
+      "Starting spatial relationship analysis"
+    );
+
+    // Get the target node
+    const targetNode = await figma.getNodeByIdAsync(nodeId);
+    if (!targetNode) {
+      throw new Error(`Node not found with ID: ${nodeId}`);
+    }
+
+    // Collect all nodes to analyze
+    const nodesToAnalyze = [];
+    
+    // Add the target node itself
+    nodesToAnalyze.push({ node: targetNode, depth: 0 });
+    
+    // Recursively collect children if requested
+    if (includeChildren) {
+      await collectChildNodes(targetNode, nodesToAnalyze, 0, maxDepth);
+    }
+
+    sendProgressUpdate(
+      commandId,
+      "analyze_spatial_relationships", 
+      "in_progress",
+      0.2,
+      nodesToAnalyze.length,
+      0,
+      `Found ${nodesToAnalyze.length} nodes to analyze`
+    );
+
+    // Analyze spatial relationships for each node
+    const results = [];
+    let processedCount = 0;
+
+    for (const { node, depth } of nodesToAnalyze) {
+      try {
+        const spatialInfo = await analyzeSingleNodeSpatialRelationship(node, depth);
+        results.push(spatialInfo);
+        
+        processedCount++;
+        sendProgressUpdate(
+          commandId,
+          "analyze_spatial_relationships",
+          "in_progress", 
+          0.2 + (0.7 * processedCount / nodesToAnalyze.length),
+          nodesToAnalyze.length,
+          processedCount,
+          `Analyzed ${processedCount}/${nodesToAnalyze.length} nodes`
+        );
+      } catch (error) {
+        console.error(`Error analyzing node ${node.id}: ${error.message}`);
+        // Continue with other nodes even if one fails
+        processedCount++;
+      }
+    }
+
+    sendProgressUpdate(
+      commandId,
+      "analyze_spatial_relationships",
+      "completed",
+      1,
+      nodesToAnalyze.length,
+      processedCount,
+      `Completed spatial analysis for ${results.length} nodes`
+    );
+
+    return results;
+
+  } catch (error) {
+    sendProgressUpdate(
+      commandId,
+      "analyze_spatial_relationships", 
+      "error",
+      0,
+      0,
+      0,
+      `Error: ${error.message}`
+    );
+    throw error;
+  }
+}
+
+/**
+ * Recursively collect child nodes up to maxDepth
+ * @param {Object} node - Parent node
+ * @param {Array} nodesToAnalyze - Array to collect nodes
+ * @param {number} currentDepth - Current depth in the tree
+ * @param {number} maxDepth - Maximum depth to traverse
+ */
+async function collectChildNodes(node, nodesToAnalyze, currentDepth, maxDepth) {
+  if (maxDepth !== -1 && currentDepth >= maxDepth) {
+    return;
+  }
+
+  if ("children" in node && node.children) {
+    for (const child of node.children) {
+      nodesToAnalyze.push({ node: child, depth: currentDepth + 1 });
+      
+      // Recursively collect grandchildren
+      await collectChildNodes(child, nodesToAnalyze, currentDepth + 1, maxDepth);
+    }
+  }
+}
+
+/**
+ * Analyze spatial relationship for a single node
+ * @param {Object} node - The node to analyze
+ * @param {number} depth - Depth in the hierarchy
+ * @returns {Promise<Object>} Spatial relationship information
+ */
+async function analyzeSingleNodeSpatialRelationship(node, depth) {
+  // Get node's bounding box
+  const boundingBox = {
+    x: node.absoluteBoundingBox?.x || node.x || 0,
+    y: node.absoluteBoundingBox?.y || node.y || 0,
+    width: node.absoluteBoundingBox?.width || node.width || 0,
+    height: node.absoluteBoundingBox?.height || node.height || 0
+  };
+
+  // Initialize result object
+  const result = {
+    nodeId: node.id,
+    name: node.name,
+    type: node.type,
+    depth: depth,
+    boundingBox: boundingBox,
+    leftElement: null,
+    rightElement: null,
+    upElement: null,
+    downElement: null,
+    leftDistance: -1,
+    rightDistance: -1,
+    upDistance: -1,
+    downDistance: -1
+  };
+
+  // Find adjacent elements in all directions
+  const adjacentElements = await findAdjacentElements(node, boundingBox);
+  
+  // Set the closest elements and distances
+  if (adjacentElements.left) {
+    result.leftElement = {
+      name: adjacentElements.left.element.name,
+      nodeId: adjacentElements.left.element.id,
+      relation: determineRelation(node, adjacentElements.left.element),
+      type: adjacentElements.left.element.type
+    };
+    result.leftDistance = adjacentElements.left.distance;
+  }
+
+  if (adjacentElements.right) {
+    result.rightElement = {
+      name: adjacentElements.right.element.name,
+      nodeId: adjacentElements.right.element.id,
+      relation: determineRelation(node, adjacentElements.right.element),
+      type: adjacentElements.right.element.type
+    };
+    result.rightDistance = adjacentElements.right.distance;
+  }
+
+  if (adjacentElements.up) {
+    result.upElement = {
+      name: adjacentElements.up.element.name,
+      nodeId: adjacentElements.up.element.id,
+      relation: determineRelation(node, adjacentElements.up.element),
+      type: adjacentElements.up.element.type
+    };
+    result.upDistance = adjacentElements.up.distance;
+  }
+
+  if (adjacentElements.down) {
+    result.downElement = {
+      name: adjacentElements.down.element.name,
+      nodeId: adjacentElements.down.element.id,
+      relation: determineRelation(node, adjacentElements.down.element),
+      type: adjacentElements.down.element.type
+    };
+    result.downDistance = adjacentElements.down.distance;
+  }
+
+  return result;
+}
+
+/**
+ * Find adjacent elements in all four directions
+ * @param {Object} node - The target node
+ * @param {Object} boundingBox - Node's bounding box
+ * @returns {Promise<Object>} Adjacent elements in all directions
+ */
+async function findAdjacentElements(node, boundingBox) {
+  const result = {
+    left: null,
+    right: null, 
+    up: null,
+    down: null
+  };
+
+  // Get all potential candidates from the current page
+  // We need to search through all nodes on the current page
+  const allNodes = await getAllNodesOnCurrentPage();
+  
+  // Filter out the current node and find closest in each direction
+  const candidates = allNodes.filter(candidate => candidate.id !== node.id);
+
+  for (const candidate of candidates) {
+    const candidateBoundingBox = {
+      x: candidate.absoluteBoundingBox?.x || candidate.x || 0,
+      y: candidate.absoluteBoundingBox?.y || candidate.y || 0,
+      width: candidate.absoluteBoundingBox?.width || candidate.width || 0,
+      height: candidate.absoluteBoundingBox?.height || candidate.height || 0
+    };
+
+    // Check left direction
+    if (candidateBoundingBox.x + candidateBoundingBox.width <= boundingBox.x) {
+      // Check for vertical overlap
+      if (hasVerticalOverlap(boundingBox, candidateBoundingBox)) {
+        const distance = boundingBox.x - (candidateBoundingBox.x + candidateBoundingBox.width);
+        if (!result.left || distance < result.left.distance) {
+          result.left = { element: candidate, distance: distance };
+        }
+      }
+    }
+
+    // Check right direction  
+    if (candidateBoundingBox.x >= boundingBox.x + boundingBox.width) {
+      // Check for vertical overlap
+      if (hasVerticalOverlap(boundingBox, candidateBoundingBox)) {
+        const distance = candidateBoundingBox.x - (boundingBox.x + boundingBox.width);
+        if (!result.right || distance < result.right.distance) {
+          result.right = { element: candidate, distance: distance };
+        }
+      }
+    }
+
+    // Check up direction
+    if (candidateBoundingBox.y + candidateBoundingBox.height <= boundingBox.y) {
+      // Check for horizontal overlap
+      if (hasHorizontalOverlap(boundingBox, candidateBoundingBox)) {
+        const distance = boundingBox.y - (candidateBoundingBox.y + candidateBoundingBox.height);
+        if (!result.up || distance < result.up.distance) {
+          result.up = { element: candidate, distance: distance };
+        }
+      }
+    }
+
+    // Check down direction
+    if (candidateBoundingBox.y >= boundingBox.y + boundingBox.height) {
+      // Check for horizontal overlap
+      if (hasHorizontalOverlap(boundingBox, candidateBoundingBox)) {
+        const distance = candidateBoundingBox.y - (boundingBox.y + boundingBox.height);
+        if (!result.down || distance < result.down.distance) {
+          result.down = { element: candidate, distance: distance };
+        }
+      }
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Check if two bounding boxes have vertical overlap
+ * @param {Object} box1 - First bounding box
+ * @param {Object} box2 - Second bounding box
+ * @returns {boolean} True if they have vertical overlap
+ */
+function hasVerticalOverlap(box1, box2) {
+  return !(box1.y + box1.height <= box2.y || box2.y + box2.height <= box1.y);
+}
+
+/**
+ * Check if two bounding boxes have horizontal overlap
+ * @param {Object} box1 - First bounding box
+ * @param {Object} box2 - Second bounding box
+ * @returns {boolean} True if they have horizontal overlap
+ */
+function hasHorizontalOverlap(box1, box2) {
+  return !(box1.x + box1.width <= box2.x || box2.x + box2.width <= box1.x);
+}
+
+/**
+ * Get all nodes on the current page (recursively)
+ * @returns {Promise<Array>} Array of all nodes
+ */
+async function getAllNodesOnCurrentPage() {
+  const allNodes = [];
+  
+  function collectNodes(node) {
+    allNodes.push(node);
+    
+    if ("children" in node && node.children) {
+      for (const child of node.children) {
+        collectNodes(child);
+      }
+    }
+  }
+  
+  // Start from current page children
+  for (const child of figma.currentPage.children) {
+    collectNodes(child);
+  }
+  
+  return allNodes;
+}
+
+/**
+ * Determine the relationship between two nodes
+ * @param {Object} node1 - First node
+ * @param {Object} node2 - Second node
+ * @returns {string} Relationship type: "parent", "sibling", "child", or "other"
+ */
+function determineRelation(node1, node2) {
+  // Check if node2 is parent of node1
+  if (node1.parent && node1.parent.id === node2.id) {
+    return "parent";
+  }
+  
+  // Check if node2 is child of node1
+  if (node2.parent && node2.parent.id === node1.id) {
+    return "child";
+  }
+  
+  // Check if they are siblings (same parent)
+  if (node1.parent && node2.parent && node1.parent.id === node2.parent.id) {
+    return "sibling";
+  }
+  
+  // Otherwise, it's some other relationship
+  return "other";
 }

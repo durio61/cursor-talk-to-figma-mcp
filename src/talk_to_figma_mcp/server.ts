@@ -52,6 +52,48 @@ interface setInstanceOverridesResult {
   }>;
 }
 
+// Spatial Analysis interfaces
+interface SpatialAnalysisResult {
+  nodeId: string;
+  name: string;
+  type: string;
+  depth: number;
+  boundingBox: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+  leftElement?: {
+    name: string;
+    nodeId: string;
+    relation: "parent" | "sibling" | "child" | "other";
+    type: string;
+  };
+  rightElement?: {
+    name: string;
+    nodeId: string;
+    relation: "parent" | "sibling" | "child" | "other";
+    type: string;
+  };
+  upElement?: {
+    name: string;
+    nodeId: string;
+    relation: "parent" | "sibling" | "child" | "other";
+    type: string;
+  };
+  downElement?: {
+    name: string;
+    nodeId: string;
+    relation: "parent" | "sibling" | "child" | "other";
+    type: string;
+  };
+  leftDistance: number;
+  rightDistance: number;
+  upDistance: number;
+  downDistance: number;
+}
+
 // Custom logging functions that write to stderr instead of stdout to avoid being captured
 const logger = {
   info: (message: string) => process.stderr.write(`[INFO] ${message}\n`),
@@ -819,6 +861,46 @@ server.tool(
   }
 );
 
+// Spatial Analysis Tool
+server.tool(
+  "analyze_spatial_relationships",
+  "Analyze spatial relationships of a node and all its children with adjacent elements",
+  {
+    nodeId: z.string().describe("Target node ID to analyze"),
+    includeChildren: z.boolean().describe("Whether to include children analysis").default(true),
+    maxDepth: z.number().describe("Maximum recursion depth, -1 for unlimited").default(-1),
+  },
+  async ({ nodeId, includeChildren, maxDepth }: any) => {
+    try {
+      const result = await sendCommandToFigma("analyze_spatial_relationships", {
+        nodeId,
+        includeChildren,
+        maxDepth,
+      });
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error analyzing spatial relationships: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          },
+        ],
+      };
+    }
+  }
+);
+
 // Delete Multiple Nodes Tool
 server.tool(
   "delete_multiple_nodes",
@@ -844,6 +926,46 @@ server.tool(
             type: "text",
             text: `Error deleting multiple nodes: ${error instanceof Error ? error.message : String(error)
               }`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+// Spatial Analysis Tool
+server.tool(
+  "analyze_spatial_relationships",
+  "Analyze spatial relationships of a node and all its children with adjacent elements",
+  {
+    nodeId: z.string().describe("Target node ID to analyze"),
+    includeChildren: z.boolean().describe("Whether to include children analysis").default(true),
+    maxDepth: z.number().describe("Maximum recursion depth, -1 for unlimited").default(-1),
+  },
+  async ({ nodeId, includeChildren, maxDepth }: any) => {
+    try {
+      const result = await sendCommandToFigma("analyze_spatial_relationships", {
+        nodeId,
+        includeChildren,
+        maxDepth,
+      });
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error analyzing spatial relationships: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
           },
         ],
       };
@@ -909,6 +1031,46 @@ server.tool(
   }
 );
 
+// Spatial Analysis Tool
+server.tool(
+  "analyze_spatial_relationships",
+  "Analyze spatial relationships of a node and all its children with adjacent elements",
+  {
+    nodeId: z.string().describe("Target node ID to analyze"),
+    includeChildren: z.boolean().describe("Whether to include children analysis").default(true),
+    maxDepth: z.number().describe("Maximum recursion depth, -1 for unlimited").default(-1),
+  },
+  async ({ nodeId, includeChildren, maxDepth }: any) => {
+    try {
+      const result = await sendCommandToFigma("analyze_spatial_relationships", {
+        nodeId,
+        includeChildren,
+        maxDepth,
+      });
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error analyzing spatial relationships: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          },
+        ],
+      };
+    }
+  }
+);
+
 // Keep the original export_node_as_image for backward compatibility
 server.tool(
   "export_node_as_image",
@@ -946,6 +1108,46 @@ server.tool(
             type: "text",
             text: `Error exporting node as image: ${error instanceof Error ? error.message : String(error)
               }`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+// Spatial Analysis Tool
+server.tool(
+  "analyze_spatial_relationships",
+  "Analyze spatial relationships of a node and all its children with adjacent elements",
+  {
+    nodeId: z.string().describe("Target node ID to analyze"),
+    includeChildren: z.boolean().describe("Whether to include children analysis").default(true),
+    maxDepth: z.number().describe("Maximum recursion depth, -1 for unlimited").default(-1),
+  },
+  async ({ nodeId, includeChildren, maxDepth }: any) => {
+    try {
+      const result = await sendCommandToFigma("analyze_spatial_relationships", {
+        nodeId,
+        includeChildren,
+        maxDepth,
+      });
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error analyzing spatial relationships: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
           },
         ],
       };
@@ -2289,6 +2491,46 @@ server.tool(
   }
 );
 
+// Spatial Analysis Tool
+server.tool(
+  "analyze_spatial_relationships",
+  "Analyze spatial relationships of a node and all its children with adjacent elements",
+  {
+    nodeId: z.string().describe("Target node ID to analyze"),
+    includeChildren: z.boolean().describe("Whether to include children analysis").default(true),
+    maxDepth: z.number().describe("Maximum recursion depth, -1 for unlimited").default(-1),
+  },
+  async ({ nodeId, includeChildren, maxDepth }: any) => {
+    try {
+      const result = await sendCommandToFigma("analyze_spatial_relationships", {
+        nodeId,
+        includeChildren,
+        maxDepth,
+      });
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error analyzing spatial relationships: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          },
+        ],
+      };
+    }
+  }
+);
+
 // Optimize Design Tool
 server.tool(
   "optimize_design",
@@ -2354,6 +2596,46 @@ Message: ${typedResult.message}`,
           {
             type: "text",
             text: `Error optimizing design: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+// Spatial Analysis Tool
+server.tool(
+  "analyze_spatial_relationships",
+  "Analyze spatial relationships of a node and all its children with adjacent elements",
+  {
+    nodeId: z.string().describe("Target node ID to analyze"),
+    includeChildren: z.boolean().describe("Whether to include children analysis").default(true),
+    maxDepth: z.number().describe("Maximum recursion depth, -1 for unlimited").default(-1),
+  },
+  async ({ nodeId, includeChildren, maxDepth }: any) => {
+    try {
+      const result = await sendCommandToFigma("analyze_spatial_relationships", {
+        nodeId,
+        includeChildren,
+        maxDepth,
+      });
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error analyzing spatial relationships: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
           },
         ],
       };
@@ -2490,7 +2772,8 @@ type FigmaCommand =
   | "set_default_connector"
   | "create_connections"
   | "set_focus"
-  | "set_selections";
+  | "set_selections"
+  | "analyze_spatial_relationships";
 
 type CommandParams = {
   get_document_info: Record<string, never>;
@@ -2657,6 +2940,11 @@ type CommandParams = {
   };
   set_selections: {
     nodeIds: string[];
+  };
+  analyze_spatial_relationships: {
+    nodeId: string;
+    includeChildren?: boolean;
+    maxDepth?: number;
   };
 
 };
@@ -2930,6 +3218,46 @@ server.tool(
             type: "text",
             text: `Error joining channel: ${error instanceof Error ? error.message : String(error)
               }`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+// Spatial Analysis Tool
+server.tool(
+  "analyze_spatial_relationships",
+  "Analyze spatial relationships of a node and all its children with adjacent elements",
+  {
+    nodeId: z.string().describe("Target node ID to analyze"),
+    includeChildren: z.boolean().describe("Whether to include children analysis").default(true),
+    maxDepth: z.number().describe("Maximum recursion depth, -1 for unlimited").default(-1),
+  },
+  async ({ nodeId, includeChildren, maxDepth }: any) => {
+    try {
+      const result = await sendCommandToFigma("analyze_spatial_relationships", {
+        nodeId,
+        includeChildren,
+        maxDepth,
+      });
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error analyzing spatial relationships: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
           },
         ],
       };

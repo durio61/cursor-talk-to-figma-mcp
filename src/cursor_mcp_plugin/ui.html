@@ -57,7 +57,7 @@
         color: #666666;
         cursor: not-allowed;
       }
-      input {
+      input[type="text"], input[type="number"] {
         border: 1px solid #444444;
         border-radius: 4px;
         padding: 8px;
@@ -67,6 +67,16 @@
         box-sizing: border-box;
         background-color: #2d2d2d;
         color: #e0e0e0;
+      }
+      input[type="checkbox"] {
+        margin-right: 8px;
+        margin-bottom: 12px;
+      }
+      label:has(input[type="checkbox"]) {
+        display: flex;
+        align-items: center;
+        margin-bottom: 12px;
+        cursor: pointer;
       }
       label {
         display: block;
@@ -186,6 +196,7 @@
 
       <div class="tabs">
         <div id="tab-connection" class="tab active">Connection</div>
+        <div id="tab-spatial" class="tab">Spatial Analysis</div>
         <div id="tab-about" class="tab">About</div>
       </div>
 
@@ -225,6 +236,42 @@
           <div style="display: flex; justify-content: space-between; margin-top: 4px; font-size: 12px;">
             <div id="progress-status">Not started</div>
             <div id="progress-percentage">0%</div>
+          </div>
+        </div>
+      </div>
+
+      <div id="content-spatial" class="tab-content">
+        <div class="section">
+          <h2>Spatial Analysis Testing</h2>
+          <p>Test the new spatial relationship analysis feature.</p>
+          
+          <div class="section">
+            <label for="target-node-id">Target Node ID (leave empty to use selected node)</label>
+            <input type="text" id="target-node-id" placeholder="Enter node ID or leave empty for selected node" />
+            
+            <label>
+              <input type="checkbox" id="include-children" checked /> Include children analysis
+            </label>
+            
+            <label for="max-depth">Max Depth (-1 for unlimited)</label>
+            <input type="number" id="max-depth" value="-1" min="-1" max="10" />
+            
+            <button id="btn-analyze-spatial" class="primary">Analyze Spatial Relationships</button>
+          </div>
+          
+          <div id="spatial-results" class="section hidden">
+            <h2>Analysis Results</h2>
+            <div style="background-color: #2d2d2d; border: 1px solid #444; border-radius: 4px; padding: 12px; max-height: 400px; overflow-y: auto;">
+              <pre id="spatial-results-content" style="margin: 0; font-size: 12px; color: #e0e0e0; white-space: pre-wrap;"></pre>
+            </div>
+            <button id="btn-copy-results" class="secondary" style="margin-top: 8px;">Copy Results</button>
+          </div>
+          
+          <div id="spatial-error" class="section hidden">
+            <h2>Error</h2>
+            <div style="background-color: #471a1a; border: 1px solid #ff9999; border-radius: 4px; padding: 12px; color: #ff9999;">
+              <div id="spatial-error-content"></div>
+            </div>
           </div>
         </div>
       </div>
@@ -550,6 +597,105 @@
         disconnectFromServer();
       });
 
+      // Spatial Analysis Testing
+      const spatialAnalysisButton = document.getElementById("btn-analyze-spatial");
+      const targetNodeIdInput = document.getElementById("target-node-id");
+      const includeChildrenCheckbox = document.getElementById("include-children");
+      const maxDepthInput = document.getElementById("max-depth");
+      const spatialResults = document.getElementById("spatial-results");
+      const spatialResultsContent = document.getElementById("spatial-results-content");
+      const spatialError = document.getElementById("spatial-error");
+      const spatialErrorContent = document.getElementById("spatial-error-content");
+      const copyResultsButton = document.getElementById("btn-copy-results");
+
+      spatialAnalysisButton.addEventListener("click", async () => {
+        // Hide previous results/errors
+        spatialResults.classList.add("hidden");
+        spatialError.classList.add("hidden");
+        
+        // Disable button during analysis
+        spatialAnalysisButton.disabled = true;
+        spatialAnalysisButton.textContent = "Analyzing...";
+        
+        try {
+          // Get parameters
+          let nodeId = targetNodeIdInput.value.trim();
+          const includeChildren = includeChildrenCheckbox.checked;
+          const maxDepth = parseInt(maxDepthInput.value) || -1;
+          
+          // If no node ID provided, get the selected node
+          if (!nodeId) {
+            // First get current selection
+            const selection = await sendCommandToPlugin("get_current_selection");
+            if (!selection || selection.length === 0) {
+              throw new Error("No node selected and no node ID provided. Please select a node in Figma or enter a node ID.");
+            }
+            nodeId = selection[0].id;
+          }
+          
+          // Call the spatial analysis function
+          const results = await sendCommandToPlugin("analyze_spatial_relationships", {
+            nodeId: nodeId,
+            includeChildren: includeChildren,
+            maxDepth: maxDepth
+          });
+          
+          // Display results
+          spatialResultsContent.textContent = JSON.stringify(results, null, 2);
+          spatialResults.classList.remove("hidden");
+          
+        } catch (error) {
+          console.error("Spatial analysis error:", error);
+          spatialErrorContent.textContent = error.message || "Unknown error occurred";
+          spatialError.classList.remove("hidden");
+        } finally {
+          // Re-enable button
+          spatialAnalysisButton.disabled = false; 
+          spatialAnalysisButton.textContent = "Analyze Spatial Relationships";
+        }
+      });
+
+      // Copy results to clipboard
+      copyResultsButton.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(spatialResultsContent.textContent);
+          copyResultsButton.textContent = "Copied!";
+          setTimeout(() => {
+            copyResultsButton.textContent = "Copy Results";
+          }, 2000);
+        } catch (error) {
+          console.error("Failed to copy to clipboard:", error);
+        }
+      });
+
+      // Helper function to send commands to plugin
+      async function sendCommandToPlugin(command, params = {}) {
+        return new Promise((resolve, reject) => {
+          const id = generateId();
+          
+          // Store the pending request
+          state.pendingRequests.set(id, { resolve, reject });
+          
+          // Send command to plugin code
+          parent.postMessage({
+            pluginMessage: {
+              type: "execute-command",
+              id: id,
+              command: command,
+              params: params
+            }
+          }, "*");
+          
+          // Set timeout
+          setTimeout(() => {
+            if (state.pendingRequests.has(id)) {
+              state.pendingRequests.delete(id);
+              reject(new Error("Request timed out"));
+            }
+          }, 30000);
+        });
+      }
+
       // Function to update progress UI
       function updateProgressUI(progressData) {
         // Show progress container if hidden
@@ -635,12 +781,28 @@
             disconnectButton.click();
             break;
           case "command-result":
-            // Forward the result from plugin code back to WebSocket
-            sendSuccessResponse(message.id, message.result);
+            // Handle both WebSocket commands and direct UI commands
+            if (state.pendingRequests.has(message.id)) {
+              // This is a direct UI request
+              const { resolve } = state.pendingRequests.get(message.id);
+              state.pendingRequests.delete(message.id);
+              resolve(message.result);
+            } else {
+              // Forward the result from plugin code back to WebSocket
+              sendSuccessResponse(message.id, message.result);
+            }
             break;
           case "command-error":
-            // Forward the error from plugin code back to WebSocket
-            sendErrorResponse(message.id, message.error);
+            // Handle both WebSocket commands and direct UI commands
+            if (state.pendingRequests.has(message.id)) {
+              // This is a direct UI request
+              const { reject } = state.pendingRequests.get(message.id);
+              state.pendingRequests.delete(message.id);
+              reject(new Error(message.error));
+            } else {
+              // Forward the error from plugin code back to WebSocket
+              sendErrorResponse(message.id, message.error);
+            }
             break;
           case "command_progress":
             // Update UI with progress information
